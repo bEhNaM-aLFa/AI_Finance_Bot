@@ -1,27 +1,26 @@
-import os
 import logging
+import os
 import tempfile
 
 import pandas as pd
-from telegram import Update
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+)
 from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
+    CallbackQueryHandler,
     ContextTypes,
     filters,
-
-from dotenv import load_dotenv
-import os
-
-load_dotenv()
-
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-
 )
 
+from config import TELEGRAM_TOKEN, DEFAULT_LANG
 from finance_analyzer import analyze_finance_from_df
 from ocr_reader import df_from_image
+from text_parser import parse_text_transaction
 
 # -------------------------------
 # Logging
@@ -32,25 +31,166 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------
-# توکن ربات را اینجا بگذار
-# ---------------------------------------------------
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-# ---------------------------------------------------
+SUPPORTED_LANGS = ["fa", "en"]
+
+MESSAGES = {
+    "start_intro": {
+        "fa": "سلام 👋\nلطفاً زبان مورد نظر را انتخاب کن:",
+        "en": "Hi 👋\nPlease choose your language:",
+    },
+    "help_main": {
+        "fa": (
+            "✅ زبان: فارسی\n\n"
+            "۱) فایل Excel خرج و دخل را بفرست.\n"
+            "۲) یا عکس رسید بانکی را بفرست.\n"
+            "۳) یا متن تراکنش را به صورت تکست ارسال کن."
+        ),
+        "en": (
+            "✅ Language: English\n\n"
+            "1) Send an Excel file with your transactions.\n"
+            "2) Or send a receipt image.\n"
+            "3) Or send a transaction as plain text."
+        ),
+    },
+    "file_received": {
+        "fa": "فایل دریافت شد ✅ در حال پردازش...",
+        "en": "File received ✅ Processing...",
+    },
+    "photo_received": {
+        "fa": "عکس دریافت شد ✅ در حال انجام OCR و تحلیل...",
+        "en": "Photo received ✅ Running OCR and analysis...",
+    },
+    "no_transactions_from_image": {
+        "fa": "هیچ تراکنشی از روی تصویر پیدا نشد.",
+        "en": "No transactions could be extracted from the image.",
+    },
+    "text_parse_failed": {
+        "fa": "متوجه نشدم. لطفاً متن تراکنش را واضح‌تر و با مبلغ و تاریخ بفرست.",
+        "en": "Could not understand. Please send a clearer transaction text with date and amount.",
+    },
+    "error_file": {
+        "fa": "در پردازش فایل خطایی رخ داد.",
+        "en": "An error occurred while processing the file.",
+    },
+    "error_photo": {
+        "fa": "در پردازش تصویر خطایی رخ داد.",
+        "en": "An error occurred while processing the image.",
+    },
+    "unknown": {
+        "fa": "برای شروع /start را بفرست و زبان را انتخاب کن.",
+        "en": "Send /start and choose your language first.",
+    },
+}
+
+
+def get_lang(context: ContextTypes.DEFAULT_TYPE) -> str:
+    lang = context.user_data.get("lang")
+    if lang in SUPPORTED_LANGS:
+        return lang
+    return DEFAULT_LANG
+
+
+def t(key: str, context: ContextTypes.DEFAULT_TYPE) -> str:
+    lang = get_lang(context)
+    return MESSAGES.get(key, {}).get(lang, "")
+
+
+# -------------------------------
+# Formatting helper
+# -------------------------------
+def format_summary(summary, lang: str, source: str) -> str:
+    """
+    source: 'Excel', 'Image', 'Text'
+    """
+    if lang == "fa":
+        title_map = {
+            "Excel": "📊 خلاصه مالی شما (Excel):",
+            "Image": "📊 خلاصه مالی از روی تصویر:",
+            "Text": "📊 خلاصه مالی از روی متن:",
+        }
+        lines = [
+            title_map.get(source, "📊 خلاصه مالی:"),
+            f"• مجموع هزینه‌ها: {summary.total_expenses:,.0f}",
+            f"• مجموع درآمدها: {summary.total_income:,.0f}",
+            f"• جریان نقدی خالص: {summary.net_cash_flow:,.0f}",
+            f"• سطح ریسک: {summary.risk_level}",
+            "",
+            "📂 تقسیم هزینه‌ها:",
+        ]
+        for cat, amt in summary.category_breakdown.items():
+            lines.append(f"- {cat}: {amt:,.0f}")
+
+        lines.append("\n🔎 نکات کلیدی:")
+        for ins in summary.insights:
+            lines.append(f"- {ins}")
+
+        lines.append("\n✅ پیشنهادها:")
+        for act in summary.actions:
+            lines.append(f"- {act}")
+
+        return "\n".join(lines)
+
+    else:
+        title_map = {
+            "Excel": "📊 Your finance summary (Excel):",
+            "Image": "📊 Finance summary from image:",
+            "Text": "📊 Finance summary from text:",
+        }
+        lines = [
+            title_map.get(source, "📊 Finance summary:"),
+            f"• Total expenses: {summary.total_expenses:,.0f}",
+            f"• Total income: {summary.total_income:,.0f}",
+            f"• Net cash flow: {summary.net_cash_flow:,.0f}",
+            f"• Risk level: {summary.risk_level}",
+            "",
+            "📂 Expense breakdown:",
+        ]
+        for cat, amt in summary.category_breakdown.items():
+            lines.append(f"- {cat}: {amt:,.0f}")
+
+        lines.append("\n🔎 Insights:")
+        for ins in summary.insights:
+            lines.append(f"- {ins}")
+
+        lines.append("\n✅ Actions:")
+        for act in summary.actions:
+            lines.append(f"- {act}")
+
+        return "\n".join(lines)
 
 
 # -------------------------------
 # /start command handler
 # -------------------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = (
-        "سلام 👋\n"
-        "من یک ربات تحلیل مالی هستم.\n\n"
-        "۱) برای تحلیل کامل، فایل Excel خرج‌و‌دخلت را بفرست.\n"
-        "   ستون‌های لازم: Date, Description, Amount, Type (Expense / Income)\n\n"
-        "۲) یا می‌توانی عکس رسید بانکی/اسکرین‌شات تراکنش را بفرستی تا OCR و تحلیل انجام شود."
+    keyboard = [
+        [
+            InlineKeyboardButton("فارسی 🇮🇷", callback_data="lang_fa"),
+            InlineKeyboardButton("English 🇬🇧", callback_data="lang_en"),
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text(
+        MESSAGES["start_intro"]["fa"],
+        reply_markup=reply_markup,
     )
-    await update.message.reply_text(text)
+
+
+# -------------------------------
+# Language selection callback
+# -------------------------------
+async def language_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    data = query.data
+    if data == "lang_fa":
+        context.user_data["lang"] = "fa"
+    elif data == "lang_en":
+        context.user_data["lang"] = "en"
+
+    lang = get_lang(context)
+    await query.edit_message_text(MESSAGES["help_main"][lang])
 
 
 # -------------------------------
@@ -64,54 +204,33 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     doc = message.document
     file_name = doc.file_name or ""
+    lang = get_lang(context)
 
     # فقط فایل اکسل را می‌پذیریم
     if not (file_name.endswith(".xlsx") or file_name.endswith(".xls")):
-        await message.reply_text("لطفاً فایل Excel ارسال کن (پسوند .xlsx یا .xls).")
+        if lang == "fa":
+            await message.reply_text("لطفاً فایل Excel ارسال کن (پسوند .xlsx یا .xls).")
+        else:
+            await message.reply_text("Please send an Excel file (.xlsx or .xls).")
         return
 
-    await message.reply_text("فایل دریافت شد ✅ در حال پردازش...")
+    await message.reply_text(t("file_received", context))
 
     try:
-        # دانلود فایل در حافظه موقت
         file = await doc.get_file()
         with tempfile.TemporaryDirectory() as tmpdir:
             file_path = os.path.join(tmpdir, file_name)
             await file.download_to_drive(file_path)
 
-            # خواندن اکسل
             df = pd.read_excel(file_path)
 
-        # تحلیل داده‌ها
         summary = analyze_finance_from_df(df)
-
-        # ساخت پیام خلاصه برای کاربر
-        text_lines = []
-        text_lines.append("📊 خلاصه مالی شما (Excel):")
-        text_lines.append(f"• مجموع هزینه‌ها: {summary.total_expenses:,.0f}")
-        text_lines.append(f"• مجموع درآمدها: {summary.total_income:,.0f}")
-        text_lines.append(f"• جریان نقدی خالص: {summary.net_cash_flow:,.0f}")
-        text_lines.append(f"• سطح ریسک: {summary.risk_level}")
-
-        text_lines.append("\n📂 تقسیم هزینه‌ها:")
-        for cat, amt in summary.category_breakdown.items():
-            text_lines.append(f"- {cat}: {amt:,.0f}")
-
-        text_lines.append("\n🔎 نکات کلیدی:")
-        for ins in summary.insights:
-            text_lines.append(f"- {ins}")
-
-        text_lines.append("\n✅ پیشنهادهای اولیه:")
-        for act in summary.actions:
-            text_lines.append(f"- {act}")
-
-        await message.reply_text("\n".join(text_lines))
+        text = format_summary(summary, lang, source="Excel")
+        await message.reply_text(text)
 
     except Exception:
         logger.exception("Error processing file")
-        await message.reply_text(
-            "در پردازش فایل خطایی رخ داد. لطفاً مطمئن شو ستون‌ها درست باشند و دوباره امتحان کن."
-        )
+        await message.reply_text(t("error_file", context))
 
 
 # -------------------------------
@@ -122,10 +241,11 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not message or not message.photo:
         return
 
-    await message.reply_text("عکس دریافت شد ✅ در حال انجام OCR و تحلیل...")
+    await message.reply_text(t("photo_received", context))
+
+    lang = get_lang(context)
 
     try:
-        # دریافت فایل
         photo = message.photo[-1]
         file = await photo.get_file()
 
@@ -133,105 +253,76 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             file_path = os.path.join(tmpdir, "receipt.jpg")
             await file.download_to_drive(file_path)
 
-            # پردازش و OCR
             df = df_from_image(file_path)
 
         if df.empty:
-            await message.reply_text(
-                "هیچ تراکنشی از روی تصویر پیدا نشد.\n"
-                "لطفاً رسید واضح‌تری بفرست یا از فرمت دیگری استفاده کن."
-            )
-
-            amt = float(df.iloc[0]["Amount"])
-date = df.iloc[0]["Date"]
-
-if amt < 1_000_000:
-    await message.reply_text(
-        f"📸 رسید شناسایی شد.\n"
-        f"- تاریخ: {date}\n"
-        f"- مبلغ تشخیص‌داده‌شده: {amt:,.0f} ریال\n\n"
-        "لطفاً مبلغ صحیح را به ریال وارد کن (فقط عدد)."
-    )
-    # این‌جا می‌تونی state نگه داری (مثلاً در context.user_data)
-    # تا پیام بعدی کاربر را به عنوان مبلغ صحیح ذخیره کنی و بعدش تحلیل را انجام بدهی.
-    return
-
+            await message.reply_text(t("no_transactions_from_image", context))
             return
 
-        # تحلیل مالی
         summary = analyze_finance_from_df(df)
+        text = format_summary(summary, lang, source="Image")
+        await message.reply_text(text)
 
-        text = []
-        text.append("📊 خلاصه مالی از روی تصویر:")
-        text.append(f"- تعداد تراکنش‌ها: {len(df)}")
-        text.append(f"- مجموع هزینه‌ها: {summary.total_expenses:,.0f}")
-        text.append(f"- سطح ریسک: {summary.risk_level}")
-
-        text.append("\n🔍 تقسیم هزینه‌ها:")
-        for cat, amt in summary.category_breakdown.items():
-            text.append(f"• {cat}: {amt:,.0f}")
-
-        text.append("\n💡 نکات:")
-        for ins in summary.insights:
-            text.append(f"• {ins}")
-
-        text.append("\n🛠 پیشنهاد:")
-        for act in summary.actions:
-            text.append(f"• {act}")
-
-        await message.reply_text("\n".join(text))
-
-    except Exception as e:
+    except Exception:
         logger.exception("Error processing OCR")
-        await message.reply_text(f"خطای OCR: {e}")
+        await message.reply_text(t("error_photo", context))
+
 
 # -------------------------------
-#Handler for text
+# Handler for text-based transactions
 # -------------------------------
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    message = update.message
+    if not message or not message.text:
+        return
 
-async def handle_text_transaction(update: Update, context: CallbackContext):
-    text = update.message.text
+    lang = get_lang(context)
+    text_input = message.text.strip()
 
-    df = parse_text_transaction(text)
-
+    df = parse_text_transaction(text_input)
     if df.empty:
-        await update.message.reply_text("متوجه نشدم. لطفاً متن تراکنش را واضح‌تر بفرست.")
+        await message.reply_text(t("text_parse_failed", context))
         return
 
     summary = analyze_finance_from_df(df)
-    await update.message.reply_text(summary.format_for_user())
+    out = format_summary(summary, lang, source="Text")
+    await message.reply_text(out)
 
 
 # -------------------------------
 # Unknown message handler
 # -------------------------------
 async def handle_unknown(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "برای شروع /start را بفرست.\n"
-        "سپس یکی از این کارها را انجام بده:\n"
-        "• ارسال فایل Excel خرج‌و‌دخل\n"
-        "• یا ارسال عکس رسید بانکی / اسکرین‌شات تراکنش"
-    )
+    await update.message.reply_text(t("unknown", context))
 
 
 # -------------------------------
 # Main function
 # -------------------------------
 def main():
-    # بررسی وجود توکن
-    if not TELEGRAM_TOKEN or TELEGRAM_TOKEN == "PUT_YOUR_BOT_TOKEN_HERE":
-        raise RuntimeError("لطفاً توکن ربات را در TELEGRAM_TOKEN قرار بده.")
+    if not TELEGRAM_TOKEN:
+        raise RuntimeError("TELEGRAM_TOKEN is not configured.")
 
     application = Application.builder().token(TELEGRAM_TOKEN).build()
 
-    # ثبت هندلرها
+    # Command + language selection
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
-    application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-    application.add_handler(MessageHandler(filters.ALL, handle_unknown))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_transaction))
+    application.add_handler(CallbackQueryHandler(language_callback, pattern="^lang_"))
 
-    # اجرا
+    # Documents (Excel)
+    application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
+
+    # Photos (receipts)
+    application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+
+    # Text (manual transaction)
+    application.add_handler(
+        MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text)
+    )
+
+    # Fallback
+    application.add_handler(MessageHandler(filters.ALL, handle_unknown))
+
     application.run_polling()
 
 

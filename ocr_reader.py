@@ -136,39 +136,44 @@ def extract_amount_from_labels(full: str) -> Optional[float]:
         "مبلغ پایا",
         "مبلغ",
     ]
-for label in labels:
-    m = re.search(fr"{label}[^\d]*([\d\s٬,]+)", full_norm)
-    if not m:
-        continue
 
-    raw = m.group(1)
+    for label in labels:
+        m = re.search(fr"{label}[^\d]*([\d\s٬,]+)", full_norm)
+        if not m:
+            continue
 
-    # نسخه بدون فاصله برای تشخیص الگوی خراب‌شده
-    raw_no_space = raw.replace(" ", "")
+        raw = m.group(1)
 
-    # هک: اگر مثل "76,0" باشد، یعنی احتمال زیاد "76,000" بوده
-    if "," in raw_no_space and raw_no_space.endswith(",0"):
-        base = raw_no_space[:-2]  # حذف ",0"
-        base_clean = base.replace(",", "").replace("٬", "")
-        if base_clean.isdigit():
-            try:
-                return float(base_clean) * 1000
-            except ValueError:
-                pass  # اگر نشد، می‌رویم سراغ منطق عادی
+        # نسخه بدون فاصله برای تشخیص الگوی خراب‌شده
+        raw_no_space = raw.replace(" ", "")
 
-    # منطق عادی
-    clean = raw.replace(" ", "").replace(",", "").replace("٬", "")
-    if not clean:
-        continue
+        # هک: اگر مثل "76,0" باشد، یعنی احتمال زیاد "76,000" بوده
+        if "," in raw_no_space and raw_no_space.endswith(",0"):
+            base = raw_no_space[:-2]  # حذف ",0"
+            base_clean = base.replace(",", "").replace("٬", "")
+            if base_clean.isdigit():
+                try:
+                    return float(base_clean) * 1000
+                except ValueError:
+                    pass  # اگر نشد، می‌رویم سراغ منطق عادی
 
-    # حذف رشته‌های خیلی بلند (شبیه شبا)
-    if len(clean) >= 14:
-        continue
+        # منطق عادی
+        clean = raw.replace(" ", "").replace(",", "").replace("٬", "")
+        if not clean:
+            continue
 
-    try:
-        return float(clean)
-    except ValueError:
-        continue
+        # حذف رشته‌های خیلی بلند (شبیه شبا)
+        if len(clean) >= 14:
+            continue
+
+        try:
+            return float(clean)
+        except ValueError:
+            continue
+
+    # اگر کنار لیبل‌ها چیزی نیافت، بزرگ‌ترین عدد منطقی را برگردان
+    return extract_best_amount(full_norm)
+
 
 # -------------------------------------------------------------------
 # تبدیل متن OCR شده به ردیف‌های تراکنش
@@ -247,7 +252,8 @@ def parse_ocr_text_to_rows(text: str) -> List[dict]:
     # مبلغ: ابتدا از کنار لیبل‌ها، اگر نشد، بزرگ‌ترین عدد منطقی
     amount_val = extract_amount_from_labels(full)
 
-    if date_str and amount_val is not None:
+    # فیلتر مبالغ خیلی کوچک (مشکوک)
+    if date_str and amount_val is not None and amount_val >= 100000:
         rows.append(
             {
                 "Date": date_str,              # تاریخ شمسی به‌صورت رشته

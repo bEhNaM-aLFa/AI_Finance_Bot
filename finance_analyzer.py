@@ -1,6 +1,7 @@
-import pandas as pd
 from dataclasses import dataclass
-from typing import Dict
+from typing import Dict, List
+
+import pandas as pd
 
 
 @dataclass
@@ -12,14 +13,14 @@ class FinanceSummary:
     essential_ratio: float
     non_essential_ratio: float
     risk_level: str
-    insights: list
-    actions: list
+    insights: List[str]
+    actions: List[str]
 
 
 def categorize_row(description: str) -> str:
     """
     دسته بندی ساده بر اساس متن توضیحات.
-    بعداً می‌توانی آن را هوشمندتر کنی.
+    در صورت نیاز می‌توانی بعداً آن را دقیق‌تر کنی.
     """
     text = (description or "").lower()
 
@@ -96,7 +97,7 @@ def analyze_finance_from_df(df: pd.DataFrame) -> FinanceSummary:
         else:
             risk_level = "High"
 
-    insights = []
+    insights: List[str] = []
     if total_expenses > total_income:
         insights.append("You are spending more than your income this period.")
     if non_essential_ratio > 0.3:
@@ -104,7 +105,7 @@ def analyze_finance_from_df(df: pd.DataFrame) -> FinanceSummary:
     if not insights:
         insights.append("Your spending pattern is relatively balanced.")
 
-    actions = []
+    actions: List[str] = []
     if non_essential_ratio > 0.3:
         actions.append("Set a monthly cap for non-essential categories (e.g., entertainment).")
     if risk_level == "High":

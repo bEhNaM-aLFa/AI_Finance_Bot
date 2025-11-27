@@ -1,10 +1,13 @@
 import re
+
 import pandas as pd
+
 
 def normalize_digits_fa_en(text: str) -> str:
     persian_digits = "۰۱۲۳۴۵۶۷۸۹"
     latin_digits = "0123456789"
     return text.translate(str.maketrans(persian_digits, latin_digits))
+
 
 DATE_PATTERNS = [
     r"(\d{4}[/-]\d{1,2}[/-]\d{1,2})",  # 1402/06/15
@@ -13,10 +16,17 @@ DATE_PATTERNS = [
 
 AMOUNT_PATTERN = r"([\d,٬]+)"
 
-EXPENSE_KEYWORDS = ["برداشت", "خرید", "هزینه", "پرداخت"]
-INCOME_KEYWORDS = ["واریز", "دریافت", "فروش", "درآمد"]
+EXPENSE_KEYWORDS = ["برداشت", "خرید", "هزینه", "پرداخت", "withdraw", "purchase", "expense"]
+INCOME_KEYWORDS = ["واریز", "دریافت", "فروش", "درآمد", "deposit", "income", "salary"]
+
 
 def parse_text_transaction(text: str) -> pd.DataFrame:
+    """
+    متن آزاد تراکنش را تحلیل می‌کند و یک DataFrame با ستون‌های
+    Date, Description, Amount, Type
+    برمی‌گرداند.
+    اگر نتوانست تشخیص دهد، DataFrame خالی برمی‌گرداند.
+    """
     text = normalize_digits_fa_en(text)
     text = text.replace("ريال", "ریال").replace("Rial", "ریال")
 
@@ -28,7 +38,7 @@ def parse_text_transaction(text: str) -> pd.DataFrame:
             raw_date = m.group(1)
             try:
                 date_val = pd.to_datetime(raw_date, dayfirst=True)
-            except:
+            except Exception:
                 pass
             break
 
@@ -39,7 +49,7 @@ def parse_text_transaction(text: str) -> pd.DataFrame:
         clean = m_amt.group(1).replace(",", "").replace("٬", "")
         try:
             amount_val = float(clean)
-        except:
+        except Exception:
             pass
 
     # 3) نوع تراکنش
@@ -53,16 +63,20 @@ def parse_text_transaction(text: str) -> pd.DataFrame:
             tx_type = "Expense"
             break
 
-    # 4) توضیح  
+    # 4) توضیح
     description = text.strip()
 
     # 5) اگر هیچ‌چیز پیدا نشد
-    if not date_val or not amount_val:
+    if date_val is None or amount_val is None:
         return pd.DataFrame(columns=["Date", "Description", "Amount", "Type"])
 
-    return pd.DataFrame([{
-        "Date": date_val,
-        "Description": description,
-        "Amount": amount_val,
-        "Type": tx_type,
-    }])
+    return pd.DataFrame(
+        [
+            {
+                "Date": date_val,
+                "Description": description,
+                "Amount": amount_val,
+                "Type": tx_type,
+            }
+        ]
+    )
