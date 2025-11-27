@@ -1,0 +1,8 @@
+{
+    "python.defaultInterpreterPath": "venv/bin/python",
+    "python.languageServer": "Pylance",
+    "editor.formatOnSave": true,
+    "files.autoSave": "afterDelay",
+    "editor.tabSize": 4,
+    "workbench.iconTheme": "material-icon-theme"
+}

@@ -1,0 +1,28 @@
+# Virtual environments
+venv/
+venv311/
+.env
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Local test data (واقعی)
+*.xlsx
+*.xls
+*.csv
+*.jpg
+*.jpeg
+*.png
+*.tmp
+
+# IDE
+.vscode/
+.idea/
