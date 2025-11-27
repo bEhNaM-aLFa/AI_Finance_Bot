@@ -43,13 +43,17 @@ MESSAGES = {
             "✅ زبان: فارسی\n\n"
             "۱) فایل Excel خرج و دخل را بفرست.\n"
             "۲) یا عکس رسید بانکی را بفرست.\n"
-            "۳) یا متن تراکنش را به صورت تکست ارسال کن."
+            "۳) یا متن تراکنش را به صورت تکست ارسال کن.\n\n"
+            "مثال متن تراکنش:\n"
+            "1402/06/15 - 3,260,000 - خرید مواد اولیه"
         ),
         "en": (
             "✅ Language: English\n\n"
             "1) Send an Excel file with your transactions.\n"
             "2) Or send a receipt image.\n"
-            "3) Or send a transaction as plain text."
+            "3) Or send a transaction as plain text.\n\n"
+            "Example text transaction:\n"
+            "2023-09-06 - 3,260,000 - Groceries"
         ),
     },
     "file_received": {
@@ -61,20 +65,22 @@ MESSAGES = {
         "en": "Photo received ✅ Running OCR and analysis...",
     },
     "no_transactions_from_image": {
-        "fa": "هیچ تراکنشی از روی تصویر پیدا نشد.",
-        "en": "No transactions could be extracted from the image.",
+        "fa": "هیچ تراکنشی از روی تصویر پیدا نشد (یا مبلغ خیلی کوچک تشخیص داده شد).",
+        "en": "No transactions could be extracted from the image (or amount too small).",
     },
     "text_parse_failed": {
-        "fa": "متوجه نشدم. لطفاً متن تراکنش را واضح‌تر و با مبلغ و تاریخ بفرست.",
-        "en": "Could not understand. Please send a clearer transaction text with date and amount.",
+        "fa": "متوجه نشدم. لطفاً متن تراکنش را واضح‌تر و با تاریخ و مبلغ بفرست.\n"
+              "مثال: 1402/06/15 - 3,260,000 - خرید مواد اولیه",
+        "en": "Could not understand. Please send a clearer text with date and amount.\n"
+              "Example: 2023-09-06 - 3,260,000 - Groceries",
     },
     "error_file": {
         "fa": "در پردازش فایل خطایی رخ داد.",
         "en": "An error occurred while processing the file.",
     },
     "error_photo": {
-        "fa": "در پردازش تصویر خطایی رخ داد.",
-        "en": "An error occurred while processing the image.",
+        "fa": "در پردازش تصویر خطایی رخ داد (OCR).",
+        "en": "An error occurred while processing the image (OCR).",
     },
     "unknown": {
         "fa": "برای شروع /start را بفرست و زبان را انتخاب کن.",
@@ -163,6 +169,7 @@ def format_summary(summary, lang: str, source: str) -> str:
 # /start command handler
 # -------------------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.info("Received /start")
     keyboard = [
         [
             InlineKeyboardButton("فارسی 🇮🇷", callback_data="lang_fa"),
@@ -182,8 +189,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def language_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-
     data = query.data
+    logger.info(f"Language callback: {data}")
+
     if data == "lang_fa":
         context.user_data["lang"] = "fa"
     elif data == "lang_en":
@@ -198,15 +206,15 @@ async def language_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # -------------------------------
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
-
     if not message or not message.document:
         return
+
+    logger.info("handle_document triggered")
 
     doc = message.document
     file_name = doc.file_name or ""
     lang = get_lang(context)
 
-    # فقط فایل اکسل را می‌پذیریم
     if not (file_name.endswith(".xlsx") or file_name.endswith(".xls")):
         if lang == "fa":
             await message.reply_text("لطفاً فایل Excel ارسال کن (پسوند .xlsx یا .xls).")
@@ -241,6 +249,8 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not message or not message.photo:
         return
 
+    logger.info("handle_photo triggered")
+
     await message.reply_text(t("photo_received", context))
 
     lang = get_lang(context)
@@ -253,7 +263,9 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             file_path = os.path.join(tmpdir, "receipt.jpg")
             await file.download_to_drive(file_path)
 
+            logger.info(f"Saved photo to {file_path}, calling df_from_image...")
             df = df_from_image(file_path)
+            logger.info(f"OCR DataFrame:\n{df}")
 
         if df.empty:
             await message.reply_text(t("no_transactions_from_image", context))
@@ -276,10 +288,15 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not message or not message.text:
         return
 
+    logger.info("handle_text triggered")
+
     lang = get_lang(context)
     text_input = message.text.strip()
+    logger.info(f"Text input: {text_input}")
 
     df = parse_text_transaction(text_input)
+    logger.info(f"Parsed text DF:\n{df}")
+
     if df.empty:
         await message.reply_text(t("text_parse_failed", context))
         return
@@ -293,6 +310,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Unknown message handler
 # -------------------------------
 async def handle_unknown(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.info("handle_unknown triggered")
     await update.message.reply_text(t("unknown", context))
 
 
