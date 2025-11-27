@@ -3,7 +3,7 @@ import pandas as pd
 
 
 def normalize_digits_fa_en(text: str) -> str:
-    """تبدیل ارقام فارسی به انگلیسی."""
+    """تبدیل ارقام فارسی به انگلیسی (برای هم‌خوانی با regex و pandas)."""
     persian_digits = "۰۱۲۳۴۵۶۷۸۹"
     latin_digits = "0123456789"
     return text.translate(str.maketrans(persian_digits, latin_digits))
@@ -15,79 +15,69 @@ DATE_PATTERNS = [
     r"(\d{1,2}[./-]\d{1,2}[./-]\d{4})",  # 06/15/1402
 ]
 
-# هر عدد با کاما/٬‌
-AMOUNT_PATTERN = r"([\d,٬]+)"
-
+# کلمات کلیدی نوع تراکنش
 EXPENSE_KEYWORDS = ["برداشت", "خرید", "هزینه", "پرداخت", "withdraw", "purchase", "expense"]
 INCOME_KEYWORDS = ["واریز", "دریافت", "فروش", "درآمد", "deposit", "income", "salary"]
 
 
 def parse_text_transaction(text: str) -> pd.DataFrame:
     """
-    متن آزاد تراکنش را تحلیل می‌کند و یک DataFrame با ستون‌های
-    Date, Description, Amount, Type
+    متن آزاد تراکنش را تحلیل می‌کند و یک DataFrame با ستون‌های:
+      Date, Description, Amount, Type
     برمی‌گرداند.
 
-    استراتژی:
-      - ارقام فارسی → انگلیسی
-      - پیدا کردن تاریخ، اگر نشد: تاریخ = امروز
-      - پیدا کردن همه اعداد، حذف شماره‌حساب‌های خیلی بلند، انتخاب بزرگ‌ترین عدد به‌عنوان مبلغ
-      - نوع تراکنش از روی کلمات کلیدی
+    منطق:
+      - هر عددی در متن باشد → سعی می‌کنیم بزرگ‌ترین عدد را مبلغ بگیریم.
+      - اگر تاریخ پیدا نشد → تاریخ = امروز.
+      - اگر هیچ عددی نبود → DF خالی.
     """
+    if not text or not text.strip():
+        return pd.DataFrame(columns=["Date", "Description", "Amount", "Type"])
+
+    # 1) نرمال‌سازی ارقام
     text = normalize_digits_fa_en(text)
     text = text.replace("ريال", "ریال").replace("Rial", "ریال")
 
-    # ---------------- 1) تاریخ ----------------
+    # 2) استخراج همه اعداد (با کاما یا جداکننده‌های هزار)
+    number_tokens = re.findall(r"[\d,٬]+", text)
+    candidates = []
+
+    for tok in number_tokens:
+        clean = tok.replace(",", "").replace("٬", "")
+        if not clean:
+            continue
+        try:
+            val = float(clean)
+        except Exception:
+            continue
+        if val <= 0:
+            continue
+        candidates.append(val)
+
+    # اگر هیچ عددی پیدا نشد → نمی‌توانیم تراکنش بسازیم
+    if not candidates:
+        return pd.DataFrame(columns=["Date", "Description", "Amount", "Type"])
+
+    # بزرگ‌ترین عدد را مبلغ می‌گیریم
+    amount_val = max(candidates)
+
+    # 3) تاریخ: تلاش برای پیدا کردن تاریخ، اگر نشد → امروز
     date_val = None
     for pat in DATE_PATTERNS:
         m = re.search(pat, text)
         if m:
             raw_date = m.group(1)
             try:
-                # dayfirst=True تا 15/06/1402 هم درست بخواند
                 date_val = pd.to_datetime(raw_date, dayfirst=True)
-            except Exception:
-                pass
-            if date_val is not None:
                 break
+            except Exception:
+                continue
 
-    # اگر تاریخ پیدا نشد، فرض = امروز
     if date_val is None:
+        # اگر تاریخ پیدا نشد، تاریخ امروز (بدون زمان)
         date_val = pd.Timestamp.today().normalize()
 
-    # ---------------- 2) مبلغ ----------------
-    numbers = re.findall(AMOUNT_PATTERN, text)
-    amount_val = None
-
-    candidates = []
-    for tok in numbers:
-        clean = tok.replace(",", "").replace("٬", "")
-        if not clean:
-            continue
-
-        # حذف شماره حساب/کارت/شباهای خیلی بلند
-        if len(clean) >= 14:
-            continue
-
-        try:
-            val = float(clean)
-        except Exception:
-            continue
-
-        if val <= 0:
-            continue
-
-        candidates.append(val)
-
-    if candidates:
-        # بزرگ‌ترین عدد را به‌عنوان مبلغ می‌گیریم
-        amount_val = max(candidates)
-
-    # اگر هیچ عدد معقولی پیدا نشد → DF خالی
-    if amount_val is None:
-        return pd.DataFrame(columns=["Date", "Description", "Amount", "Type"])
-
-    # ---------------- 3) نوع تراکنش ----------------
+    # 4) نوع تراکنش (Expense / Income)
     tx_type = "Expense"
     text_lower = text.lower()
 
@@ -101,9 +91,10 @@ def parse_text_transaction(text: str) -> pd.DataFrame:
             tx_type = "Expense"
             break
 
-    # ---------------- 4) توضیح ----------------
+    # 5) توضیح
     description = text.strip()
 
+    # 6) ساخت DataFrame
     return pd.DataFrame(
         [
             {
