@@ -252,8 +252,8 @@ def parse_ocr_text_to_rows(text: str) -> List[dict]:
     # مبلغ: ابتدا از کنار لیبل‌ها، اگر نشد، بزرگ‌ترین عدد منطقی
     amount_val = extract_amount_from_labels(full)
 
-    # فیلتر مبالغ خیلی کوچک (مشکوک)
-    if date_str and amount_val is not None and amount_val >= 100000:
+    # این‌جا دیگر فیلتر مبلغ کوچک را حذف کردیم؛ هر مبلغ مثبتی را می‌پذیریم
+    if date_str and amount_val is not None:
         rows.append(
             {
                 "Date": date_str,              # تاریخ شمسی به‌صورت رشته
